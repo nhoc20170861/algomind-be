@@ -335,9 +335,8 @@ class CreateFundRequest(BaseModel):
     logo: Optional[str] = None  
 
 @app.post("/funds/create")
-def create_fund(create_fund_request: CreateFundRequest):
+def create_fund(create_fund_request: CreateFundRequest, user_id: int = Depends(get_current_user)):
     name_fund = create_fund_request.name_fund
-    user_id = create_fund_request.user_id
     members = create_fund_request.members
     description = create_fund_request.description
     logo = create_fund_request.logo
@@ -366,7 +365,7 @@ def create_fund(create_fund_request: CreateFundRequest):
         conn.close()
 
 @app.put("/funds/update/{fund_id}")
-def update_fund(fund_id: int, update_fund_request: CreateFundRequest):
+def update_fund(fund_id: int, update_fund_request: CreateFundRequest, user_id: int = Depends(get_current_user)):
     name_fund = update_fund_request.name_fund
     members = update_fund_request.members
     description = update_fund_request.description
@@ -395,7 +394,10 @@ def update_fund(fund_id: int, update_fund_request: CreateFundRequest):
         conn.close()
 
 @app.get("/funds/user/{user_id}")
-def get_funds_by_user(user_id: int):
+def get_funds_by_user(user_id: int, current_user: int = Depends(get_current_user)):
+    if user_id != current_user:
+        raise HTTPException(status_code=403, detail="Access forbidden: you do not have permission to access these funds")
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -459,7 +461,7 @@ class ProjectResponse(BaseModel):
     type: Optional[str] = None  
 
 @app.post("/projects", response_model=ProjectResponse)
-def create_project(project_request: CreateProjectRequest):
+def create_project(project_request: CreateProjectRequest, current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
     created_at = datetime.now()
@@ -519,7 +521,7 @@ def create_project(project_request: CreateProjectRequest):
 
 
 @app.put("/projects/{project_id}", response_model=ProjectResponse)
-def update_project(project_id: int, project_request: CreateProjectRequest):
+def update_project(project_id: int, project_request: CreateProjectRequest, current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
     updated_at = datetime.now()
@@ -600,7 +602,7 @@ def update_project(project_id: int, project_request: CreateProjectRequest):
       
 
 @app.get("/projects/{project_id}", response_model=ProjectResponse)
-def get_project(project_id: int):
+def get_project(project_id: int, current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -624,8 +626,8 @@ def get_project(project_id: int):
             "project_hash": project[9],
             "is_verify": project[10],
             "status": project[11],
-            "linkcardImage": project[15], 
-            "type": project[16], 
+            "linkcardImage": project[15],
+            "type": project[16],
             "created_at": project[12],
             "updated_at": project[13],
             "deleted_at": project[14]
@@ -636,9 +638,8 @@ def get_project(project_id: int):
         cursor.close()
         conn.close()
 
-
 @app.get("/projects", response_model=List[ProjectResponse])
-def get_projects():
+def get_projects(current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -672,7 +673,7 @@ def get_projects():
         conn.close()
 
 @app.delete("/projects/{project_id}", status_code=204)
-def delete_project(project_id: int):
+def delete_project(project_id: int, current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -695,13 +696,9 @@ def delete_project(project_id: int):
 
 class UpdateProjectFundingRequest(BaseModel):
     current_fund: float
-    success: bool
-
-class UpdateProjectFundingRequest(BaseModel):
-    current_fund: float
 
 @app.put("/projects/{project_id}/addFund", response_model=ProjectResponse)
-def update_project_funding(project_id: int, funding_request: UpdateProjectFundingRequest, user_id: Optional[int] = None):
+def update_project_funding(project_id: int, funding_request: UpdateProjectFundingRequest, current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
     updated_at = datetime.now()
@@ -736,7 +733,7 @@ def update_project_funding(project_id: int, funding_request: UpdateProjectFundin
             VALUES (%s, %s, %s, %s, %s);
         ''', (
             project_id,
-            user_id,  
+            current_user["id"],
             funding_request.current_fund,
             updated_at,
             updated_at
