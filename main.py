@@ -295,6 +295,38 @@ class UserResponse(BaseModel):
     username: str
     email: str
 
+
+
+@app.get("/user/profile", response_model=UserResponse)
+def get_current_user_info(current_user: int = Depends(get_current_user)):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('SELECT * FROM algo_users WHERE id = %s AND deleted_at IS NULL;', (current_user,))
+        user = cursor.fetchone()
+
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        return {
+            "id": user[0],
+            "wallet_name": user[1],
+            "wallet_address": user[2],
+            "birthday": user[3],
+            "follow_count": user[4],
+            "created_at": user[5],
+            "updated_at": user[6],
+            "deleted_at": user[7]
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
+    finally:
+        cursor.close()
+        conn.close()
+
 @app.get("/users", response_model=List[UserResponse])
 def get_users(current_user: int = Depends(get_current_user)):
     conn = get_db_connection()
