@@ -292,10 +292,15 @@ def update_user(user_id: int, update_request: UpdateUserRequest, current_user: i
 
 class UserResponse(BaseModel):
     id: int
-    username: str
-    email: str
-
-
+    username: Optional[str] = None
+    email: Optional[str] = None
+    wallet_name: Optional[str] = None
+    wallet_address: Optional[str] = None
+    birthday: Optional[datetime] = None
+    follow_count: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    deleted_at: Optional[datetime] = None
 
 @app.get("/user/profile", response_model=UserResponse)
 def get_current_user_info(current_user: int = Depends(get_current_user)):
@@ -303,7 +308,7 @@ def get_current_user_info(current_user: int = Depends(get_current_user)):
     cursor = conn.cursor()
 
     try:
-        cursor.execute('SELECT * FROM algo_users WHERE id = %s AND deleted_at IS NULL;', (current_user,))
+        cursor.execute('SELECT id, username, email, birthday, follow_count, created_at, updated_at, deleted_at, wallet_name, wallet_address FROM algo_users WHERE id = %s AND deleted_at IS NULL;', (current_user,))
         user = cursor.fetchone()
 
         if user is None:
@@ -311,8 +316,10 @@ def get_current_user_info(current_user: int = Depends(get_current_user)):
 
         return {
             "id": user[0],
-            "wallet_name": user[1],
-            "wallet_address": user[2],
+            "username": user[1],  
+            "email": user[2],   
+            "wallet_name": user[8],
+            "wallet_address": user[9],
             "birthday": user[3],
             "follow_count": user[4],
             "created_at": user[5],
