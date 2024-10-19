@@ -77,7 +77,7 @@ def sign_in(sign_in_request: SignInRequest):
     cursor = conn.cursor()
 
     try:
-        cursor.execute('SELECT id, email, username, password, birthday, created_at FROM algo_users WHERE email = %s', (email,))
+        cursor.execute('SELECT id, email, username, password, birthday, created_at, wallet_name, wallet_address FROM algo_users WHERE email = %s', (email,))
         user_row = cursor.fetchone()
 
         if not user_row:
@@ -124,6 +124,8 @@ def sign_in(sign_in_request: SignInRequest):
             "name": user_row[2],
             "birthday": user_row[4].strftime('%Y-%m-%d'),
             "created_at": user_row[5].strftime('%Y-%m-%d %H:%M:%S'),
+            "wallet_name": user_row[6], 
+            "wallet_address": user_row[7], 
             "projects": project_list,
             "funds": fund_list
         }
@@ -136,6 +138,7 @@ def sign_in(sign_in_request: SignInRequest):
     finally:
         cursor.close()
         conn.close()
+
 
 
 class RegisterRequest(BaseModel):
@@ -188,6 +191,64 @@ def register(register_request: RegisterRequest):
         cursor.close()
         conn.close()
 
+class UpdateUserRequest(BaseModel):
+    birthday: Optional[datetime] = None
+    wallet_name: Optional[str] = None
+    wallet_address: Optional[str] = None
+    follow_count: Optional[str] = None
+    password: Optional[str] = None
+
+@app.put("/user/{user_id}")
+def update_user(user_id: int, update_request: UpdateUserRequest):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        update_fields = []
+        update_values = []
+
+        if update_request.birthday is not None:
+            update_fields.append("birthday = %s")
+            update_values.append(update_request.birthday)
+
+        if update_request.wallet_name is not None:
+            update_fields.append("wallet_name = %s")
+            update_values.append(update_request.wallet_name)
+
+        if update_request.wallet_address is not None:
+            update_fields.append("wallet_address = %s")
+            update_values.append(update_request.wallet_address)
+
+        if update_request.follow_count is not None:
+            update_fields.append("follow_count = %s")
+            update_values.append(update_request.follow_count)
+
+        if update_request.password is not None:
+            hashed_password = bcrypt.hashpw(update_request.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            update_fields.append("password = %s")
+            update_values.append(hashed_password)
+
+        if not update_fields:
+            return JSONResponse(status_code=400, content={"statusCode": 400, "message": "No fields provided to update"})
+
+        update_fields.append("updated_at = NOW()")
+        update_values.append(user_id)
+
+        update_query = f"UPDATE algo_users SET {', '.join(update_fields)} WHERE id = %s"
+
+        cursor.execute(update_query, tuple(update_values))
+        conn.commit()
+
+        return JSONResponse(status_code=200, content={"statusCode": 200, "message": "User information updated successfully"})
+    
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
+    finally:
+        cursor.close()
+        conn.close()
+
 class UserResponse(BaseModel):
     id: int
     username: str
@@ -216,9 +277,10 @@ def get_all_users():
 # FUNDS API
 class CreateFundRequest(BaseModel):
     name_fund: str
-    user_id: int  
+    user_id: int
     members: List[int]
-    description: Optional[str] = None 
+    description: str
+    logo: Optional[str] = None  
 
 @app.post("/funds/create")
 def create_fund(create_fund_request: CreateFundRequest):
@@ -226,6 +288,7 @@ def create_fund(create_fund_request: CreateFundRequest):
     user_id = create_fund_request.user_id
     members = create_fund_request.members
     description = create_fund_request.description
+    logo = create_fund_request.logo
     created_at = datetime.utcnow()
 
     conn = get_db_connection()
@@ -233,10 +296,10 @@ def create_fund(create_fund_request: CreateFundRequest):
 
     try:
         cursor.execute('''
-            INSERT INTO algo_funds (name_fund, user_id, members, description, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO algo_funds (name_fund, user_id, members, description, logo, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        ''', (name_fund, user_id, members, description, created_at, created_at))
+        ''', (name_fund, user_id, members, description, logo, created_at, created_at))
         conn.commit()
 
         fund_id = cursor.fetchone()[0]
@@ -255,6 +318,7 @@ def update_fund(fund_id: int, update_fund_request: CreateFundRequest):
     name_fund = update_fund_request.name_fund
     members = update_fund_request.members
     description = update_fund_request.description
+    logo = update_fund_request.logo
     updated_at = datetime.utcnow()
 
     conn = get_db_connection()
@@ -263,9 +327,9 @@ def update_fund(fund_id: int, update_fund_request: CreateFundRequest):
     try:
         cursor.execute('''
             UPDATE algo_funds
-            SET name_fund = %s, members = %s, description = %s, updated_at = %s
+            SET name_fund = %s, members = %s, description = %s, logo = %s, updated_at = %s
             WHERE id = %s
-        ''', (name_fund, members, description, updated_at, fund_id))
+        ''', (name_fund, members, description, logo, updated_at, fund_id))
         conn.commit()
 
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": "Fund updated successfully"})
@@ -284,7 +348,7 @@ def get_funds_by_user(user_id: int):
     cursor = conn.cursor()
 
     try:
-        cursor.execute('SELECT id, name_fund, members, description, created_at FROM algo_funds WHERE user_id = %s AND deleted_at IS NULL', (user_id,))
+        cursor.execute('SELECT id, name_fund, members, description, logo, created_at FROM algo_funds WHERE user_id = %s AND deleted_at IS NULL', (user_id,))
         funds = cursor.fetchall()
         funds_list = [
             {
@@ -292,7 +356,8 @@ def get_funds_by_user(user_id: int):
                 "name_fund": fund[1],
                 "members": fund[2],
                 "description": fund[3],
-                "created_at": fund[4].strftime('%Y-%m-%d %H:%M:%S')
+                "logo": fund[4],
+                "created_at": fund[5].strftime('%Y-%m-%d %H:%M:%S')
             }
             for fund in funds
         ]
@@ -305,7 +370,6 @@ def get_funds_by_user(user_id: int):
     finally:
         cursor.close()
         conn.close()
-
 
 #PROJECT APIS
 class CreateProjectRequest(BaseModel):
@@ -320,6 +384,8 @@ class CreateProjectRequest(BaseModel):
     project_hash: Optional[str] = None 
     is_verify: Optional[bool] = None
     status: Optional[str] = None
+    linkcardImage: Optional[List[str]] = None
+    type: Optional[str] = None  
 
 class ProjectResponse(BaseModel):
     id: int
@@ -337,6 +403,8 @@ class ProjectResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: Optional[datetime] = None
+    linkcardImage: Optional[List[str]] = None 
+    type: Optional[str] = None  
 
 @app.post("/projects", response_model=ProjectResponse)
 def create_project(project_request: CreateProjectRequest):
@@ -348,8 +416,8 @@ def create_project(project_request: CreateProjectRequest):
     try:
         cursor.execute('''
             INSERT INTO algo_projects (user_id, name, description, fund_id, current_fund, fund_raise_total, fund_raise_count, 
-            deadline, project_hash, is_verify, status, created_at, updated_at) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
+            deadline, project_hash, is_verify, status, linkcardImage, type, created_at, updated_at) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
         ''', (
             project_request.user_id, 
             project_request.name, 
@@ -361,19 +429,14 @@ def create_project(project_request: CreateProjectRequest):
             project_request.deadline, 
             project_request.project_hash, 
             project_request.is_verify, 
-            project_request.status, 
+            project_request.status,
+            project_request.linkcardImage, 
+            project_request.type,  
             created_at, 
             updated_at
         ))
-        
-        project_id = cursor.fetchone()[0]
-        conn.commit()
 
-        cursor.execute('''
-            INSERT INTO algo_project_tracks (project_id, user_id, created_at, updated_at) 
-            VALUES (%s, %s, %s, %s);
-        ''', (project_id, project_request.user_id, created_at, updated_at))
-        
+        project_id = cursor.fetchone()[0]
         conn.commit()
 
         return {
@@ -389,6 +452,8 @@ def create_project(project_request: CreateProjectRequest):
             "project_hash": project_request.project_hash,
             "is_verify": project_request.is_verify,
             "status": project_request.status,
+            "linkcardImage": project_request.linkcardImage,  
+            "type": project_request.type, 
             "created_at": created_at,
             "updated_at": updated_at
         }
@@ -398,6 +463,7 @@ def create_project(project_request: CreateProjectRequest):
     finally:
         cursor.close()
         conn.close()
+
 
 
 @app.put("/projects/{project_id}", response_model=ProjectResponse)
@@ -424,14 +490,16 @@ def update_project(project_id: int, project_request: CreateProjectRequest):
             "deadline": project_request.deadline if project_request.deadline is not None else current_project[8],
             "project_hash": project_request.project_hash if project_request.project_hash is not None else current_project[9],
             "is_verify": project_request.is_verify if project_request.is_verify is not None else current_project[10],
-            "status": project_request.status if project_request.status is not None else current_project[11]
+            "status": project_request.status if project_request.status is not None else current_project[11],
+            "linkcardImage": project_request.linkcardImage if project_request.linkcardImage is not None else current_project[12], 
+            "type": project_request.type if project_request.type is not None else current_project[13],  
         }
 
         cursor.execute('''
             UPDATE algo_projects 
             SET user_id = %s, name = %s, description = %s, fund_id = %s, current_fund = %s, 
                 fund_raise_total = %s, fund_raise_count = %s, deadline = %s, 
-                project_hash = %s, is_verify = %s, status = %s, updated_at = %s 
+                project_hash = %s, is_verify = %s, status = %s, linkcardImage = %s, type = %s, updated_at = %s 
             WHERE id = %s;
         ''', (
             updated_fields["user_id"],
@@ -445,6 +513,8 @@ def update_project(project_id: int, project_request: CreateProjectRequest):
             updated_fields["project_hash"],
             updated_fields["is_verify"],
             updated_fields["status"],
+            updated_fields["linkcardImage"],
+            updated_fields["type"],  
             updated_at,
             project_id
         ))
@@ -464,7 +534,9 @@ def update_project(project_id: int, project_request: CreateProjectRequest):
             "project_hash": updated_fields["project_hash"],
             "is_verify": updated_fields["is_verify"],
             "status": updated_fields["status"],
-            "created_at": current_project[12], 
+            "linkcardImage": updated_fields["linkcardImage"],  
+            "type": updated_fields["type"],  
+            "created_at": current_project[14], 
             "updated_at": updated_at
         }
     except Exception as e:
@@ -473,7 +545,7 @@ def update_project(project_id: int, project_request: CreateProjectRequest):
     finally:
         cursor.close()
         conn.close()
-
+      
 
 @app.get("/projects/{project_id}", response_model=ProjectResponse)
 def get_project(project_id: int):
@@ -500,6 +572,8 @@ def get_project(project_id: int):
             "project_hash": project[9],
             "is_verify": project[10],
             "status": project[11],
+            "linkcardImage": project[15], 
+            "type": project[16], 
             "created_at": project[12],
             "updated_at": project[13],
             "deleted_at": project[14]
@@ -510,37 +584,35 @@ def get_project(project_id: int):
         cursor.close()
         conn.close()
 
+
 @app.get("/projects", response_model=List[ProjectResponse])
-def get_all_projects():
+def get_projects():
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
-        cursor.execute('SELECT * FROM algo_projects WHERE deleted_at IS NULL;')
+        cursor.execute('SELECT * FROM algo_projects WHERE deleted_at IS NULL ORDER BY id DESC;')
         projects = cursor.fetchall()
 
-        project_list = [
-            ProjectResponse(
-                id=project[0],
-                user_id=project[1],
-                name=project[2],
-                description=project[3],
-                fund_id=project[4],
-                current_fund=project[5],
-                fund_raise_total=project[6],
-                fund_raise_count=project[7],
-                deadline=project[8],
-                project_hash=project[9],
-                is_verify=project[10],
-                status=project[11],
-                created_at=project[12],
-                updated_at=project[13],
-                deleted_at=project[14]
-            )
-            for project in projects
-        ]
-
-        return project_list
+        return [{
+            "id": project[0],
+            "user_id": project[1],
+            "name": project[2],
+            "description": project[3],
+            "fund_id": project[4],
+            "current_fund": project[5],
+            "fund_raise_total": project[6],
+            "fund_raise_count": project[7],
+            "deadline": project[8],
+            "project_hash": project[9],
+            "is_verify": project[10],
+            "status": project[11],
+            "linkcardImage": project[15], 
+            "type": project[16], 
+            "created_at": project[12],
+            "updated_at": project[13],
+            "deleted_at": project[14]
+        } for project in projects]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     finally:
