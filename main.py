@@ -17,6 +17,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, EmailStr
 from request_models import MermaidRequest, RequestModel, UserRequest
 from user_session import ChatSession, ChatSessionManager
+from typing import List, Optional
 
 # Load environment variables from .env file
 load_dotenv()
@@ -106,7 +107,7 @@ def sign_in(sign_in_request: SignInRequest):
         if not user_row:
             return JSONResponse(status_code=401, content={"statusCode": 401, "body": "Unauthorized"})
 
-        stored_password_hash = user_row[3] 
+        stored_password_hash = user_row[3]
         if not bcrypt.checkpw(password.encode('utf-8'), stored_password_hash.encode('utf-8')):
             return JSONResponse(status_code=401, content={"statusCode": 401, "body": "Unauthorized"})
 
@@ -121,26 +122,41 @@ def sign_in(sign_in_request: SignInRequest):
                 "description": project[3],
                 "fund_id": project[4],
                 "current_fund": project[5],
-                "deadline": project[6].strftime('%Y-%m-%d %H:%M:%S'),  
+                "deadline": project[6].strftime('%Y-%m-%d %H:%M:%S'),
                 "created_at": project[7].strftime('%Y-%m-%d %H:%M:%S')
             }
             for project in projects
         ]
+
+        cursor.execute('SELECT id, name_fund, members, description, created_at FROM algo_funds WHERE user_id = %s', (user_row[0],))
+        funds = cursor.fetchall()
+
+        fund_list = [
+            {
+                "id": fund[0],
+                "name_fund": fund[1],
+                "members": fund[2],
+                "description": fund[3],
+                "created_at": fund[4].strftime('%Y-%m-%d %H:%M:%S')
+            }
+            for fund in funds
+        ]
+
         user_info = {
             "id": user_row[0],
             "email": user_row[1],
             "name": user_row[2],
             "birthday": user_row[4].strftime('%Y-%m-%d'),
             "created_at": user_row[5].strftime('%Y-%m-%d %H:%M:%S'),
-            "projects": project_list
+            "projects": project_list,
+            "funds": fund_list
         }
 
-        return JSONResponse(status_code=200, content={
-            "statusCode": 200,
-            "body": user_info
-        })
+        return JSONResponse(status_code=200, content={"statusCode": 200, "body": user_info})
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
     finally:
         cursor.close()
         conn.close()
@@ -196,207 +212,67 @@ def register(register_request: RegisterRequest):
         cursor.close()
         conn.close()
 
-# Project API
-class Prompt(BaseModel):
-    id: str
-    text: str
-    response: str
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    email: str
 
-class AddProjectRequest(BaseModel):
-    userId: int
-    title: str
-    prompts: List[Prompt]
-    mermaid: str
+@app.get("/users", response_model=List[UserResponse])
+def get_all_users():
+    conn = get_db_connection()
+    cursor = conn.cursor()
 
-@app.post("/api/projects/addProject")
-def add_project(add_project_request: AddProjectRequest):
-    user_id = add_project_request.userId
-    title = add_project_request.title
-    prompts = add_project_request.prompts
-    mermaid = add_project_request.mermaid
+    try:
+        cursor.execute('SELECT id, username, email FROM algo_users WHERE deleted_at IS NULL;')
+        users = cursor.fetchall()
 
-    prompts_json = json.dumps([prompt.dict() for prompt in prompts])
+        user_list = [
+            UserResponse(id=user[0], username=user[1], email=user[2]) for user in users
+        ]
+
+        return user_list
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    finally:
+        cursor.close()
+        conn.close()
+    
+# FUNDS API
+class CreateFundRequest(BaseModel):
+    name_fund: str
+    user_id: int  
+    members: List[int]
+    description: Optional[str] = None 
+
+@app.post("/funds/create")
+def create_fund(create_fund_request: CreateFundRequest):
+    name_fund = create_fund_request.name_fund
+    user_id = create_fund_request.user_id
+    members = create_fund_request.members
+    description = create_fund_request.description
+    created_at = datetime.utcnow()
 
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
         cursor.execute('''
-            INSERT INTO "project" (userId, title, prompts, mermaid) 
-            VALUES (%s, %s, %s::json, %s) RETURNING id
-        ''', (user_id, title, prompts_json, mermaid))
-
-        project_id = cursor.fetchone()[0]
-
+            INSERT INTO algo_funds (name_fund, user_id, members, description, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+        ''', (name_fund, user_id, members, description, created_at, created_at))
         conn.commit()
 
-        return JSONResponse(
-            status_code=200,
-            content={
-                "statusCode": 200,
-                "body": {
-                    "project_id": project_id
-                }
-            }
-        )
-
+        fund_id = cursor.fetchone()[0]
+        return JSONResponse(status_code=200, content={"statusCode": 200, "body": {"fund_id": fund_id}})
+    
     except Exception as e:
-        logger.error(f"Error adding project: {str(e)}")  # Log the error
         conn.rollback()
-        return JSONResponse(status_code=500, content={"statusCode": 500, "body": "Something Went Wrong"})
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
     finally:
         cursor.close()
         conn.close()
-
-
-
-class DeleteProjectRequest(BaseModel):
-    projectId: int
-    userId: int
-
-@app.delete("/api/projects/deleteProject")
-def delete_project(delete_project_request: DeleteProjectRequest):
-    project_id = delete_project_request.projectId
-    user_id = delete_project_request.userId
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute('''
-            DELETE FROM "project" WHERE id = %s AND userId = %s
-        ''', (project_id, user_id))
-
-        if cursor.rowcount == 0:
-            return JSONResponse(status_code=404, content={"statusCode": 404, "body": "Project not found or unauthorized"})
-
-        conn.commit()
-
-        return JSONResponse(status_code=200, content={"statusCode": 200, "body": "Project Deleted"})
-
-    except Exception as e:
-        logger.error(f"Error deleting project: {str(e)}") 
-        conn.rollback()
-        return JSONResponse(status_code=500, content={"statusCode": 500, "body": "Something Went Wrong"})
-    finally:
-        cursor.close()
-        conn.close()
-
-class GetAllProjectsRequest(BaseModel):
-    userId: int
-
-@app.post("/api/projects/getAllProjects")
-def get_all_projects(get_projects_request: GetAllProjectsRequest):
-    user_id = get_projects_request.userId
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute('''
-            SELECT * FROM "project" WHERE "userid" = %s
-        ''', (user_id,))
-
-        projects = cursor.fetchall()
-
-        project_list = []
-        for project in projects:
-            project_dict = {
-                "id": project[0],
-                "userId": project[1],
-                "title": project[2],
-                "prompts": project[3],
-                "mermaid": project[4]
-            }
-            project_list.append(project_dict)
-
-        return JSONResponse(status_code=200, content={"statusCode": 200, "body": {"projects": project_list}})
-
-    except Exception as e:
-        logger.error(f"Error retrieving projects: {str(e)}")
-        return JSONResponse(status_code=500, content={"statusCode": 500, "body": "Something Went Wrong"})
-    finally:
-        cursor.close()
-        conn.close()
-
-class GetOneProjectRequest(BaseModel):
-    userId: int
-    projectId: int
-
-
-@app.post("/api/projects")
-def get_all_projects(get_projects_request: GetOneProjectRequest):
-    user_id = get_projects_request.userId
-    project_id = get_projects_request.projectId
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute('''
-            SELECT * FROM "project" WHERE "userid" = %s
-        ''', (user_id,))
-
-        projects = cursor.fetchall()
-
-        project_list = []
-        for project in projects:
-            project_dict = {
-                "id": project[0],
-                "userId": project[1],
-                "title": project[2],
-                "prompts": project[3],
-                "mermaid": project[4]
-            }
-            if project_id == project[0]:
-                project_list.append(project_dict)
-
-        return JSONResponse(status_code=200, content={"statusCode": 200, "body": {"projects": project_list}})
-
-    except Exception as e:
-        logger.error(f"Error retrieving projects: {str(e)}")
-        return JSONResponse(status_code=500, content={"statusCode": 500, "body": "Something Went Wrong"})
-    finally:
-        cursor.close()
-        conn.close()
-
-class RenameProjectRequest(BaseModel):
-    projectId: int
-    userId: int
-    newTitle: str
-
-@app.put("/api/projects/renameProject")
-def rename_project(rename_project_request: RenameProjectRequest):
-    project_id = rename_project_request.projectId
-    user_id = rename_project_request.userId
-    new_title = rename_project_request.newTitle
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute('''
-            UPDATE "project" SET title = %s WHERE id = %s AND userId = %s
-        ''', (new_title, project_id, user_id))
-
-        if cursor.rowcount == 0:
-            return JSONResponse(status_code=404, content={"statusCode": 404, "body": "Project not found or unauthorized"})
-
-        conn.commit()
-
-        return JSONResponse(status_code=200, content={"statusCode": 200, "body": "Project Renamed"})
-
-    except Exception as e:
-        logger.error(f"Error renaming project: {str(e)}")
-        conn.rollback()
-        return JSONResponse(status_code=500, content={"statusCode": 500, "body": "Something Went Wrong"})
-    finally:
-        cursor.close()
-        conn.close()
-
-class SaveMermaidRequest(BaseModel):
-    projectId: int
-    mermaid: str
 
 @app.get("/health-check")
 def health_check():
