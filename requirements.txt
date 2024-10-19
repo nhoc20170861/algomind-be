@@ -16,3 +16,5 @@ unstructured
 opencv-python
 langchain-chroma
 markdown
+PyJWT 
+bcrypt

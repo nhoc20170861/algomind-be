@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from logging import getLogger
 from typing import Dict, List
 
@@ -9,7 +9,7 @@ import bcrypt  # type: ignore
 import requests
 from db_utils import get_db_connection
 from dotenv import load_dotenv  # type: ignore
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse  # type: ignore
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -18,6 +18,18 @@ from pydantic import BaseModel, EmailStr
 from request_models import MermaidRequest, RequestModel, UserRequest
 from user_session import ChatSession, ChatSessionManager
 from typing import List, Optional
+import jwt
+from fastapi.security import OAuth2PasswordBearer
+
+app = FastAPI()
+
+# Secret key for JWT
+SECRET_KEY = os.getenv("SECRET_KEY", "Android@123")  # Ensure you have a strong secret key
+
+# JWT expiration time (in minutes)
+JWT_EXPIRATION_TIME = 60
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="signin")
 
 # Load environment variables from .env file
 load_dotenv()
@@ -87,6 +99,14 @@ def sign_in(sign_in_request: SignInRequest):
         if not bcrypt.checkpw(password.encode('utf-8'), stored_password_hash.encode('utf-8')):
             return JSONResponse(status_code=401, content={"statusCode": 401, "body": "Unauthorized"})
 
+        # Create JWT token
+        payload = {
+            "sub": user_row[0],  # User ID
+            "exp": datetime.utcnow() + timedelta(minutes=JWT_EXPIRATION_TIME)  # Expiration time
+        }
+        token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+        # Fetch user's projects
         cursor.execute('SELECT id, user_id, name, description, fund_id, current_fund, deadline, created_at FROM algo_projects WHERE user_id = %s', (user_row[0],))
         projects = cursor.fetchall()
 
@@ -127,7 +147,8 @@ def sign_in(sign_in_request: SignInRequest):
             "wallet_name": user_row[6], 
             "wallet_address": user_row[7], 
             "projects": project_list,
-            "funds": fund_list
+            "funds": fund_list,
+            "token": token 
         }
 
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": user_info})
@@ -138,6 +159,10 @@ def sign_in(sign_in_request: SignInRequest):
     finally:
         cursor.close()
         conn.close()
+
+@app.post("/signout")
+def sign_out():
+    return JSONResponse(status_code=200, content={"statusCode": 200, "body": "Signed out successfully"})
 
 
 
@@ -198,14 +223,30 @@ class UpdateUserRequest(BaseModel):
     follow_count: Optional[str] = None
     password: Optional[str] = None
 
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return user_id
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
 @app.put("/user/{user_id}")
-def update_user(user_id: int, update_request: UpdateUserRequest):
+def update_user(user_id: int, update_request: UpdateUserRequest, current_user: int = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
         update_fields = []
         update_values = []
+
+        if user_id != current_user:
+            raise HTTPException(status_code=403, detail="Permission denied: You can only update your own profile.")
 
         if update_request.birthday is not None:
             update_fields.append("birthday = %s")
@@ -255,25 +296,36 @@ class UserResponse(BaseModel):
     email: str
 
 @app.get("/users", response_model=List[UserResponse])
-def get_all_users():
+def get_users(current_user: int = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
-        cursor.execute('SELECT id, username, email FROM algo_users WHERE deleted_at IS NULL;')
+        cursor.execute('SELECT id, email, username, birthday, created_at, wallet_name, wallet_address FROM algo_users')
         users = cursor.fetchall()
 
         user_list = [
-            UserResponse(id=user[0], username=user[1], email=user[2]) for user in users
+            {
+                "id": user[0],
+                "email": user[1],
+                "username": user[2],
+                "birthday": user[3].strftime('%Y-%m-%d'),
+                "created_at": user[4].strftime('%Y-%m-%d %H:%M:%S'),
+                "wallet_name": user[5],
+                "wallet_address": user[6]
+            }
+            for user in users
         ]
 
-        return user_list
+        return JSONResponse(status_code=200, content={"statusCode": 200, "body": user_list})
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
     finally:
         cursor.close()
         conn.close()
-    
+
 # FUNDS API
 class CreateFundRequest(BaseModel):
     name_fund: str
