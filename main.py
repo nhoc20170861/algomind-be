@@ -9,7 +9,7 @@ import bcrypt  # type: ignore
 import requests
 from db_utils import get_db_connection
 from dotenv import load_dotenv  # type: ignore
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse  # type: ignore
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -335,12 +335,16 @@ def get_current_user_info(current_user: int = Depends(get_current_user)):
         conn.close()
 
 @app.get("/users", response_model=List[UserResponse])
-def get_users(current_user: int = Depends(get_current_user)):
+def get_users(current_user: int = Depends(get_current_user), email: Optional[str] = Query(None)):
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
-        cursor.execute('SELECT id, email, username, birthday, created_at, wallet_name, wallet_address FROM algo_users')
+        if email:
+            cursor.execute('SELECT id, email, username, birthday, created_at, wallet_name, wallet_address FROM algo_users WHERE email = %s', (email,))
+        else:
+            cursor.execute('SELECT id, email, username, birthday, created_at, wallet_name, wallet_address FROM algo_users')
+
         users = cursor.fetchall()
 
         user_list = [
@@ -481,23 +485,23 @@ class CreateProjectRequest(BaseModel):
     type: Optional[str] = None  
 
 class ProjectResponse(BaseModel):
-    id: int
-    user_id: int
-    name: str
+    id: Optional[int] = None
+    user_id: Optional[int] = None
+    name: Optional[str] = None
     description: Optional[str] = None
     fund_id: Optional[int] = None
-    current_fund: int
-    fund_raise_total: int
-    fund_raise_count: int
+    current_fund: Optional[int] = None
+    fund_raise_total: Optional[int] = None
+    fund_raise_count: Optional[int] = None
     deadline: Optional[datetime] = None
-    project_hash: str
-    is_verify: bool
-    status: str
-    created_at: datetime
-    updated_at: datetime
+    project_hash: Optional[str] = None
+    is_verify: Optional[bool] = None
+    status: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     deleted_at: Optional[datetime] = None
     linkcardImage: Optional[List[str]] = None 
-    type: Optional[str] = None  
+    type: Optional[str] = None
 
 @app.post("/projects", response_model=ProjectResponse)
 def create_project(project_request: CreateProjectRequest, current_user: dict = Depends(get_current_user)):
@@ -641,7 +645,7 @@ def update_project(project_id: int, project_request: CreateProjectRequest, curre
       
 
 @app.get("/projects/{project_id}", response_model=ProjectResponse)
-def get_project(project_id: int, current_user: dict = Depends(get_current_user)):
+def get_project(project_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -652,7 +656,7 @@ def get_project(project_id: int, current_user: dict = Depends(get_current_user))
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        return {
+        project_data = {
             "id": project[0],
             "user_id": project[1],
             "name": project[2],
@@ -661,16 +665,17 @@ def get_project(project_id: int, current_user: dict = Depends(get_current_user))
             "current_fund": project[5],
             "fund_raise_total": project[6],
             "fund_raise_count": project[7],
-            "deadline": project[8],
+            "deadline": project[8].strftime('%Y-%m-%d %H:%M:%S') if project[8] else None,
             "project_hash": project[9],
             "is_verify": project[10],
             "status": project[11],
             "linkcardImage": project[15],
             "type": project[16],
-            "created_at": project[12],
-            "updated_at": project[13],
-            "deleted_at": project[14]
+            "created_at": project[12].strftime('%Y-%m-%d %H:%M:%S') if project[12] else None,
+            "updated_at": project[13].strftime('%Y-%m-%d %H:%M:%S') if project[13] else None,
+            "deleted_at": project[14].strftime('%Y-%m-%d %H:%M:%S') if project[14] else None
         }
+        return JSONResponse(status_code=200, content={"statusCode": 200, "body": project_data})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     finally:
@@ -678,7 +683,7 @@ def get_project(project_id: int, current_user: dict = Depends(get_current_user))
         conn.close()
 
 @app.get("/projects", response_model=List[ProjectResponse])
-def get_projects(current_user: dict = Depends(get_current_user)):
+def get_projects():
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -686,7 +691,7 @@ def get_projects(current_user: dict = Depends(get_current_user)):
         cursor.execute('SELECT * FROM algo_projects WHERE deleted_at IS NULL ORDER BY id DESC;')
         projects = cursor.fetchall()
 
-        return [{
+        project_list = [{
             "id": project[0],
             "user_id": project[1],
             "name": project[2],
@@ -695,16 +700,17 @@ def get_projects(current_user: dict = Depends(get_current_user)):
             "current_fund": project[5],
             "fund_raise_total": project[6],
             "fund_raise_count": project[7],
-            "deadline": project[8],
+            "deadline": project[8].strftime('%Y-%m-%d %H:%M:%S') if project[8] else None,
             "project_hash": project[9],
             "is_verify": project[10],
             "status": project[11],
             "linkcardImage": project[15], 
             "type": project[16], 
-            "created_at": project[12],
-            "updated_at": project[13],
-            "deleted_at": project[14]
+            "created_at": project[12].strftime('%Y-%m-%d %H:%M:%S') if project[12] else None,
+            "updated_at": project[13].strftime('%Y-%m-%d %H:%M:%S') if project[13] else None,
+            "deleted_at": project[14].strftime('%Y-%m-%d %H:%M:%S') if project[14] else None
         } for project in projects]
+        return JSONResponse(status_code=200, content={"statusCode": 200, "body": project_list})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     finally:
