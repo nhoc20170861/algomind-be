@@ -650,7 +650,12 @@ def get_project(project_id: int):
     cursor = conn.cursor()
 
     try:
-        cursor.execute('SELECT * FROM algo_projects WHERE id = %s AND deleted_at IS NULL;', (project_id,))
+        cursor.execute('''
+            SELECT p.*, f.name_fund, f.logo, f.description 
+            FROM algo_projects p
+            LEFT JOIN algo_funds f ON p.fund_id = f.id
+            WHERE p.id = %s AND p.deleted_at IS NULL;
+        ''', (project_id,))
         project = cursor.fetchone()
 
         if project is None:
@@ -673,7 +678,10 @@ def get_project(project_id: int):
             "type": project[16],
             "created_at": project[12].strftime('%Y-%m-%d %H:%M:%S') if project[12] else None,
             "updated_at": project[13].strftime('%Y-%m-%d %H:%M:%S') if project[13] else None,
-            "deleted_at": project[14].strftime('%Y-%m-%d %H:%M:%S') if project[14] else None
+            "deleted_at": project[14].strftime('%Y-%m-%d %H:%M:%S') if project[14] else None,
+            "fund_name": project[17],
+            "fund_logo": project[18],
+            "fund_description": project[19]
         }
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": project_data})
     except Exception as e:
@@ -688,7 +696,13 @@ def get_projects():
     cursor = conn.cursor()
 
     try:
-        cursor.execute('SELECT * FROM algo_projects WHERE deleted_at IS NULL ORDER BY id DESC;')
+        cursor.execute('''
+            SELECT p.*, f.name_fund, f.logo, f.description 
+            FROM algo_projects p
+            LEFT JOIN algo_funds f ON p.fund_id = f.id
+            WHERE p.deleted_at IS NULL
+            ORDER BY p.id DESC;
+        ''')
         projects = cursor.fetchall()
 
         project_list = [{
@@ -708,7 +722,10 @@ def get_projects():
             "type": project[16], 
             "created_at": project[12].strftime('%Y-%m-%d %H:%M:%S') if project[12] else None,
             "updated_at": project[13].strftime('%Y-%m-%d %H:%M:%S') if project[13] else None,
-            "deleted_at": project[14].strftime('%Y-%m-%d %H:%M:%S') if project[14] else None
+            "deleted_at": project[14].strftime('%Y-%m-%d %H:%M:%S') if project[14] else None,
+            "fund_name": project[17],
+            "fund_logo": project[18],
+            "fund_description": project[19]
         } for project in projects]
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": project_list})
     except Exception as e:
