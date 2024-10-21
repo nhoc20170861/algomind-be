@@ -9,12 +9,12 @@ import bcrypt  # type: ignore
 import requests
 from db_utils import get_db_connection
 from dotenv import load_dotenv  # type: ignore
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse  # type: ignore
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, constr
 from request_models import MermaidRequest, RequestModel, UserRequest
 from user_session import ChatSession, ChatSessionManager
 from typing import List, Optional
@@ -758,9 +758,16 @@ def delete_project(project_id: int, current_user: dict = Depends(get_current_use
 
 class UpdateProjectFundingRequest(BaseModel):
     current_fund: float
+    email: EmailStr | None = None
+    sodienthoai: constr(max_length=50) | None = None  # type: ignore # Optional phone number
+    address: str | None = None 
+    name: str | None = None  
+    type_sender_wallet: str | None = None
+    sender_wallet_address: str | None = None  
+
 
 @app.put("/projects/{project_id}/addFund", response_model=ProjectResponse)
-def update_project_funding(project_id: int, funding_request: UpdateProjectFundingRequest, current_user: dict = Depends(get_current_user)):
+def update_project_funding(project_id: int, funding_request: UpdateProjectFundingRequest):
     conn = get_db_connection()
     cursor = conn.cursor()
     updated_at = datetime.now()
@@ -782,7 +789,7 @@ def update_project_funding(project_id: int, funding_request: UpdateProjectFundin
 
         cursor.execute('''
             UPDATE algo_projects 
-            SET current_fund = %s, updated_at = %s 
+            SET current_fund = %s, fund_raise_count = fund_raise_count + 1, updated_at = %s 
             WHERE id = %s;
         ''', (
             new_current_fund,
@@ -791,12 +798,17 @@ def update_project_funding(project_id: int, funding_request: UpdateProjectFundin
         ))
 
         cursor.execute('''
-            INSERT INTO algo_contributions (project_id, user_id, amount, created_at, updated_at) 
-            VALUES (%s, %s, %s, %s, %s);
+            INSERT INTO algo_contributions (project_id, amount, email, sodienthoai, address, name, type_sender_wallet, sender_wallet_address, created_at, updated_at) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
         ''', (
             project_id,
-            current_user["id"],
             funding_request.current_fund,
+            funding_request.email if funding_request.email else None,
+            funding_request.sodienthoai if funding_request.sodienthoai else None,
+            funding_request.address if funding_request.address else None,
+            funding_request.name if funding_request.name else None,
+            funding_request.type_sender_wallet,
+            funding_request.sender_wallet_address,
             updated_at,
             updated_at
         ))
@@ -822,6 +834,345 @@ def update_project_funding(project_id: int, funding_request: UpdateProjectFundin
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    finally:
+        cursor.close()
+        conn.close()
+
+class ContributionResponse(BaseModel):
+    id: int
+    project_id: int
+    amount: Optional[float] = None
+    email: Optional[str] = None
+    sodienthoai: Optional[str] = None
+    address: Optional[str] = None
+    name: Optional[str] = None
+    type_sender_wallet: Optional[str] = None
+    sender_wallet_address: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+@app.get("/projects/{project_id}/contributions", response_model=List[ContributionResponse])
+def get_contributions_by_project_id(project_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            SELECT id, project_id, amount, email, sodienthoai, address, name,
+                   type_sender_wallet, sender_wallet_address, created_at, updated_at
+            FROM algo_contributions
+            WHERE project_id = %s;
+        ''', (project_id,))
+
+        contributions = cursor.fetchall()
+
+        if not contributions:
+            raise HTTPException(status_code=404, detail="No contributions found for this project.")
+
+        response = [
+            contrib.dict()
+            for contrib in [
+                ContributionResponse(
+                    id=contrib[0],
+                    project_id=contrib[1],
+                    amount=contrib[2],
+                    email=contrib[3],
+                    sodienthoai=contrib[4],
+                    address=contrib[5],
+                    name=contrib[6],
+                    type_sender_wallet=contrib[7],
+                    sender_wallet_address=contrib[8],
+                    created_at=contrib[9].isoformat() if contrib[9] else None,
+                    updated_at=contrib[10].isoformat() if contrib[10] else None     
+                )
+                for contrib in contributions
+            ]
+        ]
+        return JSONResponse(status_code=200, content={"statusCode": 200, "body": response})
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    finally:
+        cursor.close()
+        conn.close()
+
+# RECEIVERS API
+
+class ReceiverBase(BaseModel):
+    project_id: int
+    email: Optional[EmailStr] = None
+    sodienthoai: Optional[str] = None
+    address: Optional[str] = None
+    name: Optional[str] = None
+    type_receiver_wallet: Optional[str] = None
+    receiver_wallet_address: Optional[str] = None
+
+class ReceiverCreate(ReceiverBase):
+    pass
+
+class ReceiverUpdate(ReceiverBase):
+    pass
+
+class ReceiverResponse(BaseModel):
+    id: int
+    project_id: int
+    email: Optional[str] = None
+    sodienthoai: Optional[str] = None
+    address: Optional[str] = None
+    name: Optional[str] = None
+    type_receiver_wallet: Optional[str] = None
+    receiver_wallet_address: Optional[str] = None
+    created_at: str 
+    updated_at: str 
+
+@app.get("/receivers", response_model=List[ReceiverResponse])
+def get_receivers(email: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        query = "SELECT * FROM algo_receivers"
+        params = []
+
+        if email:
+            query += " WHERE email = %s"
+            params.append(email)
+
+        cursor.execute(query, params)
+        receivers = cursor.fetchall()
+        
+        response = [
+            {
+                "id": receiver[0],
+                "project_id": receiver[1],
+                "email": receiver[2],
+                "sodienthoai": receiver[3],
+                "address": receiver[4],
+                "name": receiver[5],
+                "type_receiver_wallet": receiver[6],
+                "receiver_wallet_address": receiver[7],
+                "created_at": receiver[8].isoformat() if receiver[8] else None,  
+                "updated_at": receiver[9].isoformat() if receiver[9] else None 
+            }
+            for receiver in receivers
+        ]
+
+        return JSONResponse(status_code=200, content=response)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.post("/receivers", response_model=ReceiverResponse, status_code=status.HTTP_201_CREATED)
+def create_receiver(receiver: ReceiverCreate, current_user: dict = Depends(get_current_user)):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    created_at = datetime.now()
+    updated_at = created_at
+
+    try:
+        cursor.execute('''
+            SELECT id FROM algo_projects WHERE id = %s;
+        ''', (receiver.project_id,))
+        project = cursor.fetchone()
+
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found.")
+
+        cursor.execute('''
+            INSERT INTO algo_receivers (project_id, email, sodienthoai, address, name, 
+                                         type_receiver_wallet, receiver_wallet_address, created_at, updated_at) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
+        ''', (
+            receiver.project_id,
+            receiver.email,
+            receiver.sodienthoai,
+            receiver.address,
+            receiver.name,
+            receiver.type_receiver_wallet,
+            receiver.receiver_wallet_address,
+            created_at,
+            updated_at
+        ))
+
+        receiver_id = cursor.fetchone()[0]
+        conn.commit()
+
+        return {**receiver.dict(), "id": receiver_id, "created_at": created_at.isoformat(), "updated_at": updated_at.isoformat()}
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.put("/receivers/{receiver_id}", response_model=ReceiverResponse)
+def update_receiver(receiver_id: int, receiver: ReceiverCreate, current_user: dict = Depends(get_current_user)):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    updated_at = datetime.now()
+
+    try:
+        cursor.execute("SELECT * FROM algo_receivers WHERE id = %s", (receiver_id,))
+        existing_receiver = cursor.fetchone()
+
+        if not existing_receiver:
+            raise HTTPException(status_code=404, detail="Receiver not found.")
+
+        cursor.execute('''
+            UPDATE algo_receivers 
+            SET project_id = %s, email = %s, sodienthoai = %s, address = %s, 
+                name = %s, type_receiver_wallet = %s, receiver_wallet_address = %s, 
+                updated_at = %s 
+            WHERE id = %s;
+        ''', (
+            receiver.project_id,
+            receiver.email,
+            receiver.sodienthoai,
+            receiver.address,
+            receiver.name,
+            receiver.type_receiver_wallet,
+            receiver.receiver_wallet_address,
+            updated_at,
+            receiver_id
+        ))
+
+        conn.commit()
+
+        updated_receiver = {
+            "id": receiver_id,
+            "project_id": receiver.project_id,
+            "email": receiver.email,
+            "sodienthoai": receiver.sodienthoai,
+            "address": receiver.address,
+            "name": receiver.name,
+            "type_receiver_wallet": receiver.type_receiver_wallet,
+            "receiver_wallet_address": receiver.receiver_wallet_address,
+            "created_at": existing_receiver[8].isoformat() if existing_receiver[8] else None,
+            "updated_at": updated_at.isoformat() 
+        }
+
+        return JSONResponse(status_code=status.HTTP_200_OK, content=updated_receiver)
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.delete("/receivers/{receiver_id}", status_code=status.HTTP_200_OK)
+def delete_receiver(receiver_id: int, current_user: dict = Depends(get_current_user)):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('SELECT * FROM algo_receivers WHERE id = %s', (receiver_id,))
+        existing_receiver = cursor.fetchone()
+
+        if not existing_receiver:
+            raise HTTPException(status_code=404, detail="Receiver not found.")
+
+        cursor.execute('DELETE FROM algo_receivers WHERE id = %s', (receiver_id,))
+        conn.commit()
+
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"statusCode": 200, "detail": "Receiver deleted successfully."})
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
+    finally:
+        cursor.close()
+        conn.close()
+
+class Receiver(BaseModel):
+    id: int
+    project_id: int
+    email: str | None = None
+    sodienthoai: str | None = None
+    address: str | None = None
+    name: str | None = None
+    type_receiver_wallet: str | None = None
+    receiver_wallet_address: str | None = None
+
+class TransactionResponse(BaseModel):
+    receiver_id: int
+    project_id: int
+    transaction_count: int
+    amount: float
+    time_round: str
+    created_at: str
+    updated_at: str
+
+@app.post("/projects/{project_id}/distribute_fund", response_model=List[TransactionResponse])
+def distribute_funds(project_id: int, current_user: dict = Depends(get_current_user)):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            SELECT current_fund, fund_raise_total FROM algo_projects WHERE id = %s;
+        ''', (project_id,))
+        project = cursor.fetchone()
+
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found.")
+
+        current_fund, fund_raise_total = project
+        if current_fund != fund_raise_total:
+            raise HTTPException(status_code=400, detail="Current fund does not equal fund raise total.")
+
+        cursor.execute('SELECT * FROM algo_receivers WHERE project_id = %s;', (project_id,))
+        receivers = cursor.fetchall()
+
+        if not receivers:
+            raise HTTPException(status_code=404, detail="No receivers found for this project.")
+
+        num_receivers = len(receivers)
+        amount_per_receiver = current_fund / num_receivers
+
+        transactions = []
+        for i, receiver in enumerate(receivers):
+            receiver_id = receiver[0]
+            cursor.execute('''
+                INSERT INTO algo_receivers_transaction (receiver_id, project_id, transaction_count, amount, time_round, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id;
+            ''', (
+                receiver_id,
+                project_id,
+                i + 1, 
+                amount_per_receiver,
+                datetime.now(), 
+                datetime.now(),
+                datetime.now() 
+            ))
+            transaction_id = cursor.fetchone()[0]
+            transactions.append({
+                "receiver_id": receiver_id,
+                "project_id": project_id,
+                "transaction_count": i + 1,
+                "amount": amount_per_receiver,
+                "time_round": datetime.now().isoformat(),
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+            })
+
+        conn.commit()
+        return transactions
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
     finally:
         cursor.close()
         conn.close()
