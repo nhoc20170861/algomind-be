@@ -20,6 +20,7 @@ from user_session import ChatSession, ChatSessionManager
 from typing import List, Optional
 import jwt
 from fastapi.security import OAuth2PasswordBearer
+from test_algorand import router as algorand_router
 
 app = FastAPI()
 
@@ -63,6 +64,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(algorand_router)
 
 # fix the region_name -> us-west-2
 session_manager = ChatSessionManager(conn=conn)

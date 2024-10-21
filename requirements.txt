@@ -18,3 +18,4 @@ langchain-chroma
 markdown
 PyJWT 
 bcrypt
+py-algorand-sdk
