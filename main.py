@@ -737,6 +737,61 @@ def get_projects():
         cursor.close()
         conn.close()
 
+@app.get("/projects/filter/user/{user_id}/fund/{fund_id}", response_model=List[ProjectResponse])
+def filter_projects(
+    user_id: int,
+    fund_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        query = '''
+            SELECT p.*, f.name_fund, f.logo, f.description 
+            FROM algo_projects p
+            LEFT JOIN algo_funds f ON p.fund_id = f.id
+            WHERE p.deleted_at IS NULL
+            AND p.user_id = %s
+            AND p.fund_id = %s
+            ORDER BY p.id DESC;
+        '''
+
+        cursor.execute(query, (user_id, fund_id))
+        projects = cursor.fetchall()
+
+        project_list = [{
+            "id": project[0],
+            "user_id": project[1],
+            "name": project[2],
+            "description": project[3],
+            "fund_id": project[4],
+            "current_fund": project[5],
+            "fund_raise_total": project[6],
+            "fund_raise_count": project[7],
+            "deadline": project[8].strftime('%Y-%m-%d %H:%M:%S') if project[8] else None,
+            "project_hash": project[9],
+            "is_verify": project[10],
+            "status": project[11],
+            "linkcardImage": project[15], 
+            "type": project[16], 
+            "created_at": project[12].strftime('%Y-%m-%d %H:%M:%S') if project[12] else None,
+            "updated_at": project[13].strftime('%Y-%m-%d %H:%M:%S') if project[13] else None,
+            "deleted_at": project[14].strftime('%Y-%m-%d %H:%M:%S') if project[14] else None,
+            "fund_name": project[17],
+            "fund_logo": project[18],
+            "fund_description": project[19]
+        } for project in projects]
+        
+        return JSONResponse(status_code=200, content={"statusCode": 200, "body": project_list})
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
+    finally:
+        cursor.close()
+        conn.close()
+
 @app.delete("/projects/{project_id}", status_code=204)
 def delete_project(project_id: int, current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
