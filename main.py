@@ -564,7 +564,65 @@ def create_project(project_request: CreateProjectRequest, current_user: dict = D
         cursor.close()
         conn.close()
 
+class Contribution(BaseModel):
+    amount: float
+    email: str
+    sodienthoai: str
+    address: str
+    name: str
+    type_sender_wallet: str
+    sender_wallet_address: str
 
+# Pydantic model for the contribution response
+class ContributionResponse(BaseModel):
+    project_id: int
+    amount: float
+    email: str
+    sodienthoai: str
+    address: str
+    name: str
+    type_sender_wallet: str
+    sender_wallet_address: str
+
+@app.post("/projects/{project_id}/contributions", response_model=ContributionResponse)
+def insert_contribution(
+    project_id: int,
+    contribution: Contribution,
+    x_key_sc: str = Depends(lambda: os.getenv('x_key_sc'))
+):
+    if x_key_sc != os.getenv('x_key_sc'):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            INSERT INTO algo_contributions (project_id, amount, email, sodienthoai, address, name, type_sender_wallet, sender_wallet_address)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id;  -- Return the new contribution ID
+        ''', (project_id, contribution.amount, contribution.email, contribution.sodienthoai, contribution.address, contribution.name, contribution.type_sender_wallet, contribution.sender_wallet_address))
+
+        contribution_id = cursor.fetchone()[0]
+        conn.commit()
+        
+        response_contribution = {
+            "project_id": project_id,
+            "amount": contribution.amount,
+            "email": contribution.email,
+            "sodienthoai": contribution.sodienthoai,
+            "address": contribution.address,
+            "name": contribution.name,
+            "type_sender_wallet": contribution.type_sender_wallet,
+            "sender_wallet_address": contribution.sender_wallet_address
+        }
+        return JSONResponse(status_code=200, content={"statusCode": 200, "body": response_contribution})
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    finally:
+        cursor.close()
+        conn.close()
 
 @app.put("/projects/{project_id}", response_model=ProjectResponse)
 def update_project(project_id: int, project_request: CreateProjectRequest, current_user: dict = Depends(get_current_user)):
