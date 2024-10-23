@@ -163,6 +163,8 @@ def sign_in(sign_in_request: SignInRequest):
         cursor.close()
         conn.close()
 
+
+
 @app.post("/signout")
 def sign_out():
     return JSONResponse(status_code=200, content={"statusCode": 200, "body": "Signed out successfully"})
@@ -470,6 +472,38 @@ def get_funds_by_user(user_id: int, current_user: int = Depends(get_current_user
     finally:
         cursor.close()
         conn.close()
+
+@app.get("/funds/{fund_id}/user/{user_id}")
+def get_one_fund_by_user(fund_id: int, user_id: int, current_user: int = Depends(get_current_user)):
+    if user_id != current_user:
+        raise HTTPException(status_code=403, detail="Access forbidden: you do not have permission to access these funds")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('SELECT id, name_fund, members, description, logo, created_at FROM algo_funds WHERE user_id = %s AND id = %s AND deleted_at IS NULL', (user_id, fund_id,))
+        fund = cursor.fetchone()
+        if not fund:
+            raise HTTPException(status_code=404, detail="Fund not found")
+	
+ 	    fund_info = {
+            "id": fund[0],
+            "name_fund": fund[1],
+            "description": fund[2],
+            "logo": fund[3],
+            "members": fund[4],
+            "created_at": fund[5].strftime('%Y-%m-%d %H:%M:%S')
+        }
+        return JSONResponse(status_code=200, content={"statusCode": 200, "body": fund_info })
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
+    finally:
+        cursor.close()
+        conn.close()
+
 
 #PROJECT APIS
 class CreateProjectRequest(BaseModel):
