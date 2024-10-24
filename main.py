@@ -507,15 +507,15 @@ def get_one_fund_by_user(fund_id: int, user_id: int, current_user: int = Depends
         fund = cursor.fetchone()
         if not fund:
             raise HTTPException(status_code=404, detail="Fund not found")
-		
-		fund_info = {
-			"id": fund[0],
-        	"name_fund": fund[1],
-        	"description": fund[2],
-        	"logo": fund[3],
-        	"members": fund[4],
-        	"created_at": fund[5].strftime('%Y-%m-%d %H:%M:%S')
-    	}
+
+        fund_info = {
+    "id": fund[0],
+            "name_fund": fund[1],
+            "description": fund[2],
+            "logo": fund[3],
+            "members": fund[4],
+            "created_at": fund[5].strftime('%Y-%m-%d %H:%M:%S')
+        }
 
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": fund_info })
     
@@ -628,8 +628,8 @@ class Contribution(BaseModel):
     name: str
     type_sender_wallet: str
     sender_wallet_address: str
-	receiver_wallet_addres: str
-	time_round: datetime  
+    receiver_wallet_addres: str
+    time_round: datetime  
 
 # Pydantic model for the contribution response
 class ContributionResponse(BaseModel):
@@ -641,10 +641,10 @@ class ContributionResponse(BaseModel):
     name: str
     type_sender_wallet: str
     sender_wallet_address: str
-	receiver_wallet_addres: str
+    receiver_wallet_addres: str
     time_round: datetime  
     project_current_fund: float
-	fund_raise_count: int
+    fund_raise_count: int
 
 @app.post("/projects/{project_id}/contributions", response_model=ContributionResponse)
 def insert_contribution(
@@ -667,15 +667,15 @@ def insert_contribution(
 
         contribution_id = cursor.fetchone()[0]
 
-		# Update the current_fund of the corresponding project in algo_projects table
+    # Update the current_fund of the corresponding project in algo_projects table
         cursor.execute('''
             UPDATE algo_projects
             SET current_fund = current_fund + %s
-				fund_raise_count = fund_raise_count + 1
+                fund_raise_count = fund_raise_count + 1
             WHERE id = %s;
-        ''', (.amount, project_id))
+        ''', (contribution.amount, project_id))
 
-		updated_fund, updated_raise_count = cursor.fetchone()
+        updated_fund, updated_raise_count = cursor.fetchone()
         conn.commit()
         
         response_ = {
@@ -686,10 +686,10 @@ def insert_contribution(
             "address": contribution.address,
             "name": contribution.name,
             "type_sender_wallet": contribution.type_sender_wallet,
-            "sender_wallet_address": contribution.sender_wallet_address
-			"receiver_wallet_addres": contribution.receiver_wallet_addres
-			"time_round" : contribution.time_round
-			"current_fund": updated_fund,
+            "sender_wallet_address": contribution.sender_wallet_address,
+            "receiver_wallet_addres": contribution.receiver_wallet_addres,
+            "time_round" : contribution.time_round,
+            "current_fund": updated_fund,
             "fund_raise_count": updated_raise_count
         }
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": response_})
