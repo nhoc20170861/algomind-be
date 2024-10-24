@@ -450,19 +450,40 @@ def get_funds_by_user(user_id: int, current_user: int = Depends(get_current_user
     cursor = conn.cursor()
 
     try:
-        cursor.execute('SELECT id, name_fund, members, description, logo, created_at FROM algo_funds WHERE user_id = %s AND deleted_at IS NULL', (user_id,))
+        # Truy vấn để lấy thông tin quỹ và thông tin thành viên
+        cursor.execute('''
+            SELECT f.id, f.name_fund, f.description, f.logo, f.created_at, 
+                   u.id AS user_id, u.name AS user_name
+            FROM algo_funds f
+            LEFT JOIN algo_users u ON u.id = ANY(f.members)
+            WHERE f.user_id = %s AND f.deleted_at IS NULL
+        ''', (user_id,))
+        
         funds = cursor.fetchall()
-        funds_list = [
-            {
-                "id": fund[0],
-                "name_fund": fund[1],
-                "members": fund[2],
-                "description": fund[3],
-                "logo": fund[4],
-                "created_at": fund[5].strftime('%Y-%m-%d %H:%M:%S')
-            }
-            for fund in funds
-        ]
+
+        # Tạo danh sách quỹ và thông tin thành viên
+        funds_list = []
+        for fund in funds:
+            fund_id = fund[0]
+            # Kiểm tra xem quỹ đã có trong danh sách chưa
+            fund_info = next((f for f in funds_list if f["id"] == fund_id), None)
+            if not fund_info:
+                fund_info = {
+                    "id": fund_id,
+                    "name_fund": fund[1],
+                    "members": [],  # Khởi tạo danh sách thành viên
+                    "description": fund[2],
+                    "logo": fund[3],
+                    "created_at": fund[4].strftime('%Y-%m-%d %H:%M:%S')
+                }
+                funds_list.append(fund_info)
+            
+            # Thêm thông tin thành viên vào quỹ
+            if fund[5] is not None:  # Kiểm tra nếu user_id không phải là NULL
+                fund_info["members"].append({
+                    "user_id": fund[5],
+                    "name": fund[6]
+                })
 
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": funds_list})
     
@@ -480,20 +501,21 @@ def get_one_fund_by_user(fund_id: int, user_id: int, current_user: int = Depends
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    fund_info = {
-        "id": fund[0],
-        "name_fund": fund[1],
-        "description": fund[2],
-        "logo": fund[3],
-        "members": fund[4],
-        "created_at": fund[5].strftime('%Y-%m-%d %H:%M:%S')
-    }
+   
     try:
         cursor.execute('SELECT id, name_fund, members, description, logo, created_at FROM algo_funds WHERE user_id = %s AND id = %s AND deleted_at IS NULL', (user_id, fund_id,))
         fund = cursor.fetchone()
         if not fund:
             raise HTTPException(status_code=404, detail="Fund not found")
-	
+		
+		fund_info = {
+			"id": fund[0],
+        	"name_fund": fund[1],
+        	"description": fund[2],
+        	"logo": fund[3],
+        	"members": fund[4],
+        	"created_at": fund[5].strftime('%Y-%m-%d %H:%M:%S')
+    	}
 
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": fund_info })
     
@@ -606,6 +628,8 @@ class Contribution(BaseModel):
     name: str
     type_sender_wallet: str
     sender_wallet_address: str
+	receiver_wallet_addres: str
+	time_round: datetime  
 
 # Pydantic model for the contribution response
 class ContributionResponse(BaseModel):
@@ -617,6 +641,10 @@ class ContributionResponse(BaseModel):
     name: str
     type_sender_wallet: str
     sender_wallet_address: str
+	receiver_wallet_addres: str
+    time_round: datetime  
+    project_current_fund: float
+	fund_raise_count: int
 
 @app.post("/projects/{project_id}/contributions", response_model=ContributionResponse)
 def insert_contribution(
@@ -632,15 +660,25 @@ def insert_contribution(
 
     try:
         cursor.execute('''
-            INSERT INTO algo_contributions (project_id, amount, email, sodienthoai, address, name, type_sender_wallet, sender_wallet_address)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO algo_contributions (project_id, amount, email, sodienthoai, address, name, type_sender_wallet, sender_wallet_address, receiver_wallet_addres, time_round)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;  -- Return the new contribution ID
-        ''', (project_id, contribution.amount, contribution.email, contribution.sodienthoai, contribution.address, contribution.name, contribution.type_sender_wallet, contribution.sender_wallet_address))
+        ''', (project_id, contribution.amount, contribution.email, contribution.sodienthoai, contribution.address, contribution.name, contribution.type_sender_wallet, contribution.sender_wallet_address, contribution.receiver_wallet_addres, contribution.time_round))
 
         contribution_id = cursor.fetchone()[0]
+
+		# Update the current_fund of the corresponding project in algo_projects table
+        cursor.execute('''
+            UPDATE algo_projects
+            SET current_fund = current_fund + %s
+				fund_raise_count = fund_raise_count + 1
+            WHERE id = %s;
+        ''', (.amount, project_id))
+
+		updated_fund, updated_raise_count = cursor.fetchone()
         conn.commit()
         
-        response_contribution = {
+        response_ = {
             "project_id": project_id,
             "amount": contribution.amount,
             "email": contribution.email,
@@ -649,8 +687,12 @@ def insert_contribution(
             "name": contribution.name,
             "type_sender_wallet": contribution.type_sender_wallet,
             "sender_wallet_address": contribution.sender_wallet_address
+			"receiver_wallet_addres": contribution.receiver_wallet_addres
+			"time_round" : contribution.time_round
+			"current_fund": updated_fund,
+            "fund_raise_count": updated_raise_count
         }
-        return JSONResponse(status_code=200, content={"statusCode": 200, "body": response_contribution})
+        return JSONResponse(status_code=200, content={"statusCode": 200, "body": response_})
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
@@ -948,7 +990,7 @@ def update_project_funding(project_id: int, funding_request: UpdateProjectFundin
         ))
 
         cursor.execute('''
-            INSERT INTO algo_contributions (project_id, amount, email, sodienthoai, address, name, type_sender_wallet, sender_wallet_address, created_at, updated_at) 
+            INSERT INTO algo_s (project_id, amount, email, sodienthoai, address, name, type_sender_wallet, sender_wallet_address, created_at, updated_at) 
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
         ''', (
             project_id,
@@ -988,7 +1030,7 @@ def update_project_funding(project_id: int, funding_request: UpdateProjectFundin
         cursor.close()
         conn.close()
 
-class ContributionResponse(BaseModel):
+class Response(BaseModel):
     id: int
     project_id: int
     amount: Optional[float] = None
