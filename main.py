@@ -3,20 +3,18 @@ import logging
 import os
 from datetime import datetime, timedelta
 from logging import getLogger
-from typing import Dict, List
+from typing import  List
+from dateutil import parser
 
 import bcrypt  # type: ignore
-import requests
+
 from db_utils import get_db_connection
 from dotenv import load_dotenv  # type: ignore
 from fastapi import FastAPI, HTTPException, Depends, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse  # type: ignore
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, EmailStr, constr
-from request_models import MermaidRequest, RequestModel, UserRequest
-from user_session import ChatSession, ChatSessionManager
+
 from typing import List, Optional
 import jwt
 from fastapi.security import OAuth2PasswordBearer
@@ -67,17 +65,7 @@ app.add_middleware(
 
 app.include_router(algorand_router)
 
-# fix the region_name -> us-west-2
-session_manager = ChatSessionManager(conn=conn)
 
-
-MODEL = os.getenv("MODEL", "gemini-1.5-flash")
-API_TOKEN = os.environ["API_TOKEN"]
-
-chat_model = ChatGoogleGenerativeAI(
-    model=MODEL,
-    api_key=API_KEY,
-)
 # USERS API
 class SignInRequest(BaseModel):
     email: str
@@ -92,7 +80,7 @@ def sign_in(sign_in_request: SignInRequest):
     cursor = conn.cursor()
 
     try:
-        cursor.execute('SELECT id, email, username, password, birthday, created_at, wallet_name, wallet_address FROM algo_users WHERE email = %s', (email,))
+        cursor.execute('SELECT id, email, username, password, birthday, created_at FROM algo_users WHERE email = %s', (email,))
         user_row = cursor.fetchone()
 
         if not user_row:
@@ -147,8 +135,6 @@ def sign_in(sign_in_request: SignInRequest):
             "name": user_row[2],
             "birthday": user_row[4].strftime('%Y-%m-%d'),
             "created_at": user_row[5].strftime('%Y-%m-%d %H:%M:%S'),
-            "wallet_name": user_row[6], 
-            "wallet_address": user_row[7], 
             "projects": project_list,
             "funds": fund_list,
             "token": token 
@@ -157,6 +143,7 @@ def sign_in(sign_in_request: SignInRequest):
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": user_info})
     
     except Exception as e:
+        logger.error(f"Error signing in: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     
     finally:
@@ -215,7 +202,8 @@ def register(register_request: RegisterRequest):
 
     except Exception as e:
         conn.rollback()
-        raise HTTPException(status_code=500, detail="Something went wrong")
+        logger.error(f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     
     finally:
         cursor.close()
@@ -434,6 +422,7 @@ def update_fund(fund_id: int, update_fund_request: CreateFundRequest, user_id: i
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": "Fund updated successfully"})
     
     except Exception as e:
+        logger.error(f"Error signing in: {str(e)}")
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     
@@ -454,9 +443,9 @@ def get_funds_by_user(user_id: int, current_user: int = Depends(get_current_user
         # Truy vấn để lấy thông tin quỹ và thông tin thành viên
         cursor.execute('''
             SELECT f.id, f.name_fund, f.description, f.logo, f.created_at, 
-                   u.id AS user_id, u.name AS user_name
+                   u.id AS user_id, u.username AS user_name
             FROM algo_funds f
-            LEFT JOIN algo_users u ON u.id::text = ANY(f.members)
+            LEFT JOIN algo_users u ON u.id::integer = ANY(f.members)
             WHERE f.user_id = %s AND f.deleted_at IS NULL
         ''', (user_id,))
         
@@ -538,7 +527,8 @@ class CreateProjectRequest(BaseModel):
     fund_raise_total: Optional[int] = None
     fund_raise_count: Optional[int] = None
     deadline: Optional[datetime] = None
-    project_hash: Optional[str] = None 
+    wallet_type: Optional[str] = None
+    wallet_address: Optional[str] = None 
     is_verify: Optional[bool] = None
     status: Optional[str] = None
     linkcardImage: Optional[List[str]] = None
@@ -551,16 +541,16 @@ class ProjectResponse(BaseModel):
     description: Optional[str] = None
     fund_id: Optional[int] = None
     current_fund: Optional[int] = None
+    linkcardImage: Optional[List[str]] = None 
     fund_raise_total: Optional[int] = None
     fund_raise_count: Optional[int] = None
     deadline: Optional[datetime] = None
-    project_hash: Optional[str] = None
+    wallet_address: Optional[str] = None
     is_verify: Optional[bool] = None
     status: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     deleted_at: Optional[datetime] = None
-    linkcardImage: Optional[List[str]] = None 
     type: Optional[str] = None
 
 @app.post("/projects", response_model=ProjectResponse)
@@ -568,12 +558,11 @@ def create_project(project_request: CreateProjectRequest, current_user: dict = D
     conn = get_db_connection()
     cursor = conn.cursor()
     created_at = datetime.now()
-    updated_at = created_at
 
     try:
         cursor.execute('''
-            INSERT INTO algo_projects (user_id, name, description, fund_id, current_fund, fund_raise_total, fund_raise_count, 
-            deadline, project_hash, is_verify, status, linkcardImage, type, created_at, updated_at) 
+            INSERT INTO algo_projects (user_id, name, description, fund_id, current_fund, "linkcardImage", type, fund_raise_total, fund_raise_count, 
+            deadline, wallet_address, wallet_type, is_verify, status, created_at) 
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
         ''', (
             project_request.user_id, 
@@ -581,16 +570,16 @@ def create_project(project_request: CreateProjectRequest, current_user: dict = D
             project_request.description, 
             project_request.fund_id, 
             project_request.current_fund, 
+            project_request.linkcardImage, 
+            project_request.type,  
             project_request.fund_raise_total, 
             project_request.fund_raise_count, 
             project_request.deadline, 
-            project_request.project_hash, 
+            project_request.wallet_address, 
+            project_request.wallet_type,
             project_request.is_verify, 
             project_request.status,
-            project_request.linkcardImage, 
-            project_request.type,  
-            created_at, 
-            updated_at
+            created_at
         ))
 
         project_id = cursor.fetchone()[0]
@@ -606,16 +595,15 @@ def create_project(project_request: CreateProjectRequest, current_user: dict = D
             "fund_raise_total": project_request.fund_raise_total,
             "fund_raise_count": project_request.fund_raise_count,
             "deadline": project_request.deadline,
-            "project_hash": project_request.project_hash,
+            "wallet_address": project_request.wallet_address,
             "is_verify": project_request.is_verify,
             "status": project_request.status,
             "linkcardImage": project_request.linkcardImage,  
-            "type": project_request.type, 
-            "created_at": created_at,
-            "updated_at": updated_at
+            "type": project_request.type
         }
     except Exception as e:
         conn.rollback()
+        logger.error(f"Error creating project: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     finally:
         cursor.close()
@@ -631,11 +619,13 @@ class Contribution(BaseModel):
     name: Optional[str] = None
     type_sender_wallet: str
     sender_wallet_address: str
-    receiver_wallet_addres: str
-    time_round: datetime  
+    project_wallet_address: str
+    time_round: int  
+    project_current_fund: float
 
 # Pydantic model for the contribution response
 class ContributionResponse(BaseModel):
+    contribution_id: int
     project_id: int
     txid: str
     amount: float
@@ -645,8 +635,8 @@ class ContributionResponse(BaseModel):
     name: str
     type_sender_wallet: str
     sender_wallet_address: str
-    receiver_wallet_addres: str
-    time_round: datetime  
+    project_wallet_address: str
+    time_round: int  
     project_current_fund: float
     fund_raise_count: int
 
@@ -664,22 +654,30 @@ def insert_contribution(
 
     try:
         cursor.execute('''
-            INSERT INTO algo_contributions (project_id, txid, amount, email, sodienthoai, address, name, type_sender_wallet, sender_wallet_address, receiver_wallet_addres, time_round)
+            INSERT INTO algo_contributions_transtaction (project_id, txid, amount, email, sodienthoai, address, name, type_sender_wallet, sender_wallet_address, project_wallet_address, time_round)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;  -- Return the new contribution ID
-        ''', (project_id, contribution.txid, contribution.amount, contribution.email, contribution.sodienthoai, contribution.address, contribution.name, contribution.type_sender_wallet, contribution.sender_wallet_address, contribution.receiver_wallet_addres, contribution.time_round))
+        ''', (project_id, contribution.txid, contribution.amount, contribution.email, contribution.sodienthoai, contribution.address, contribution.name, contribution.type_sender_wallet, contribution.sender_wallet_address, contribution.project_wallet_address, contribution.time_round))
 
         contribution_id = cursor.fetchone()[0]
 
-    # Update the current_fund of the corresponding project in algo_projects table
+        # Update the current_fund of the corresponding project in algo_projects table
+        cursor.execute('SELECT * FROM algo_projects WHERE id = %s', (project_id,))
+        current_project = cursor.fetchone()
+
+        if not current_project:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        
+        # current_fund = current_project_dict['current_fund']
+        # fund_raise_total = current_project_dict['fund_raise_total']
+        fund_raise_count = current_project[9]
+
         cursor.execute('''
             UPDATE algo_projects
-            SET current_fund = current_fund + %s
-                fund_raise_count = fund_raise_count + 1
+            SET current_fund = %s, fund_raise_count = fund_raise_count + 1
             WHERE id = %s;
-        ''', (contribution.amount, project_id))
+        ''', (contribution.project_current_fund, project_id))
 
-        updated_fund, updated_raise_count = cursor.fetchone()
         conn.commit()
         
         response_ = {
@@ -687,20 +685,21 @@ def insert_contribution(
             "project_id": project_id,
             "txid": contribution.txid,
             "amount": contribution.amount,
-            "email": contribution.email,
-            "sodienthoai": contribution.sodienthoai,
-            "address": contribution.address,
-            "name": contribution.name,
+            "email": contribution.email if contribution.email is not None else "",
+            "sodienthoai": contribution.sodienthoai if contribution.sodienthoai is not None else "",
+            "address": contribution.address if contribution.address is not None else "",
+            "name": contribution.name if contribution.name is not None else "",
             "type_sender_wallet": contribution.type_sender_wallet,
             "sender_wallet_address": contribution.sender_wallet_address,
-            "receiver_wallet_addres": contribution.receiver_wallet_addres,
+            "project_wallet_address": contribution.project_wallet_address,
             "time_round" : contribution.time_round,
-            "current_fund": updated_fund,
-            "fund_raise_count": updated_raise_count
+            "current_fund": contribution.project_current_fund,
+            "fund_raise_count": fund_raise_count + 1
         }
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": response_})
     except Exception as e:
         conn.rollback()
+        logger.error(f"Error signing in: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     finally:
         cursor.close()
@@ -811,23 +810,46 @@ def get_project(project_id: int):
             "description": project[3],
             "fund_id": project[4],
             "current_fund": project[5],
-            "fund_raise_total": project[6],
-            "fund_raise_count": project[7],
-            "deadline": project[8].strftime('%Y-%m-%d %H:%M:%S') if project[8] else None,
-            "project_hash": project[9],
-            "is_verify": project[10],
-            "status": project[11],
-            "linkcardImage": project[15],
-            "type": project[16],
-            "created_at": project[12].strftime('%Y-%m-%d %H:%M:%S') if project[12] else None,
-            "updated_at": project[13].strftime('%Y-%m-%d %H:%M:%S') if project[13] else None,
-            "deleted_at": project[14].strftime('%Y-%m-%d %H:%M:%S') if project[14] else None,
-            "fund_name": project[17],
-            "fund_logo": project[18],
-            "fund_description": project[19]
+            "linkcardImage": project[6], 
+            "type": project[7], 
+            "fund_raise_total": project[8],
+            "fund_raise_count": project[9],
+            "deadline": project[10].strftime('%Y-%m-%d %H:%M:%S') if project[10] else None,
+            "wallet_address": project[11],
+            "wallet_type": project[12],
+            "is_verify": project[13],
+            "status": project[14],
+            "created_at": project[15].strftime('%Y-%m-%d %H:%M:%S') if project[15] else None,
+            "updated_at": project[16].strftime('%Y-%m-%d %H:%M:%S') if project[16] else None,
+            "deleted_at": project[17].strftime('%Y-%m-%d %H:%M:%S') if project[17] else None,
+            "fund_name": project[18],
+            "fund_logo": project[19],
+            "fund_description": project[20],
+            "receivers": [] 
         }
+
+        # get receivers
+        cursor.execute('''
+            SELECT email, sodienthoai, address, name, type_receiver_wallet, receiver_wallet_address
+            FROM algo_receivers
+            WHERE project_id = %s;
+        ''', (project_id,))
+        
+        receivers = cursor.fetchall()
+
+        for receiver in receivers:
+            project_data["receivers"].append({
+                "email": receiver[0],
+                "phone": receiver[1],
+                "address": receiver[2],
+                "name": receiver[3],
+                "type_receiver_wallet": receiver[4],
+                "receiver_wallet_address": receiver[5]
+            })
+
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": project_data})
     except Exception as e:
+        logger.error(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     finally:
         cursor.close()
@@ -855,21 +877,23 @@ def get_projects():
             "description": project[3],
             "fund_id": project[4],
             "current_fund": project[5],
-            "fund_raise_total": project[6],
-            "fund_raise_count": project[7],
-            "deadline": project[8].strftime('%Y-%m-%d %H:%M:%S') if project[8] else None,
-            "project_hash": project[9],
-            "is_verify": project[10],
-            "status": project[11],
-            "linkcardImage": project[15], 
-            "type": project[16], 
-            "created_at": project[12].strftime('%Y-%m-%d %H:%M:%S') if project[12] else None,
-            "updated_at": project[13].strftime('%Y-%m-%d %H:%M:%S') if project[13] else None,
-            "deleted_at": project[14].strftime('%Y-%m-%d %H:%M:%S') if project[14] else None,
-            "fund_name": project[17],
-            "fund_logo": project[18],
-            "fund_description": project[19]
+            "linkcardImage": project[6], 
+            "type": project[7], 
+            "fund_raise_total": project[8],
+            "fund_raise_count": project[9],
+            "deadline": project[10].strftime('%Y-%m-%d %H:%M:%S') if project[10] else None,
+            "wallet_address": project[11],
+            "wallet_type": project[12],
+            "is_verify": project[13],
+            "status": project[14],
+            "created_at": project[15].strftime('%Y-%m-%d %H:%M:%S') if project[15] else None,
+            "updated_at": project[16].strftime('%Y-%m-%d %H:%M:%S') if project[16] else None,
+            "deleted_at": project[17].strftime('%Y-%m-%d %H:%M:%S') if project[17] else None,
+            "fund_name": project[18],
+            "fund_logo": project[19],
+            "fund_description": project[20]
         } for project in projects]
+
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": project_list})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
@@ -907,20 +931,21 @@ def filter_projects(
             "description": project[3],
             "fund_id": project[4],
             "current_fund": project[5],
-            "fund_raise_total": project[6],
-            "fund_raise_count": project[7],
-            "deadline": project[8].strftime('%Y-%m-%d %H:%M:%S') if project[8] else None,
-            "project_hash": project[9],
-            "is_verify": project[10],
-            "status": project[11],
-            "linkcardImage": project[15], 
-            "type": project[16], 
-            "created_at": project[12].strftime('%Y-%m-%d %H:%M:%S') if project[12] else None,
-            "updated_at": project[13].strftime('%Y-%m-%d %H:%M:%S') if project[13] else None,
-            "deleted_at": project[14].strftime('%Y-%m-%d %H:%M:%S') if project[14] else None,
-            "fund_name": project[17],
-            "fund_logo": project[18],
-            "fund_description": project[19]
+            "linkcardImage": project[6], 
+            "type": project[7], 
+            "fund_raise_total": project[8],
+            "fund_raise_count": project[9],
+            "deadline": project[10].strftime('%Y-%m-%d %H:%M:%S') if project[10] else None,
+            "wallet_address": project[11],
+            "wallet_type": project[12],
+            "is_verify": project[13],
+            "status": project[14],
+            "created_at": project[15].strftime('%Y-%m-%d %H:%M:%S') if project[15] else None,
+            "updated_at": project[16].strftime('%Y-%m-%d %H:%M:%S') if project[16] else None,
+            "deleted_at": project[17].strftime('%Y-%m-%d %H:%M:%S') if project[17] else None,
+            "fund_name": project[18],
+            "fund_logo": project[19],
+            "fund_description": project[20]
         } for project in projects]
         
         return JSONResponse(status_code=200, content={"statusCode": 200, "body": project_list})
