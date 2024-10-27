@@ -19,8 +19,11 @@ from typing import List, Optional
 import jwt
 from fastapi.security import OAuth2PasswordBearer
 from test_algorand import router as algorand_router
+from fastapi import FastAPI
 
-app = FastAPI()
+app = FastAPI(swagger_ui_parameters={"syntaxHighlight.theme": "obsidian"})
+
+# app = FastAPI()
 
 # Secret key for JWT
 SECRET_KEY = os.getenv("SECRET_KEY", "Android@123")  # Ensure you have a strong secret key
