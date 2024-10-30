@@ -1,9 +1,9 @@
 # initialize_db.py
 from sqlmodel import SQLModel, create_engine
-from database.models import *  # Giả sử models.py chứa các model của bạn
+from models import *  # Giả sử models.py chứa các model của bạn
 
 # Khởi tạo engine PostgreSQL
-engine = create_engine("postgresql://anhquan:password@localhost:5432/algomind")
+engine = create_engine("postgresql://algomind_user:G547D4SNYaPWkigM6fsXQLCR0eiVikd7@dpg-csg5fhu8ii6s739cbdng-a.singapore-postgres.render.com/algomind")
 
 # Tạo lại các bảng trong cơ sở dữ liệu
 SQLModel.metadata.create_all(engine, checkfirst=False)

@@ -8,6 +8,12 @@ from dateutil import parser
 
 import bcrypt  # type: ignore
 
+import requests
+import time
+import threading
+import schedule
+from contextlib import asynccontextmanager
+
 from db_utils import get_db_connection
 from dotenv import load_dotenv  # type: ignore
 from fastapi import FastAPI, HTTPException, Depends, Query, status
@@ -37,7 +43,9 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="signin")
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
-logger = getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("uvicorn")
+
 conn = get_db_connection()
 PROXY_PREFIX = os.getenv("PROXY_PREFIX", "/api")
 app = FastAPI(root_path=PROXY_PREFIX)
@@ -1412,6 +1420,33 @@ def health_check():
 def home():
     return {"message": "Solar Sailors welcome you to the backend of the project."}
 
+def reload_website():
+    url = "https://algomind-be-04f9.onrender.com/health-check"  # Replace with your Render URL
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        logger.info(f"Reloaded at {time.strftime('%Y-%m-%d %H:%M:%S')}: Status Code {response.status_code}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error reloading at {time.strftime('%Y-%m-%d %H:%M:%S')}: {e}")
+
+def run_schedule():
+    schedule.every(30).seconds.do(reload_website)  # Gọi hàm reload_website mỗi 30 giây một lần
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+# Định nghĩa một hàm lifespan để khởi động và dọn dẹp tài nguyên
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("auto reload active")
+    # Tạo một luồng để chạy schedule
+    thread = threading.Thread(target=run_schedule)
+    thread.daemon = True  # Đặt luồng thành daemon để nó tự động dừng khi ứng dụng dừng
+    thread.start()
+    yield  # Chờ cho đến khi ứng dụng dừng lại
+    logger.info("Shutting down auto reload")
+
+app = FastAPI(lifespan=lifespan)
 
 if __name__ == "__main__":
     import uvicorn
