@@ -27,10 +27,6 @@ from fastapi.security import OAuth2PasswordBearer
 from test_algorand import router as algorand_router
 from fastapi import FastAPI
 
-app = FastAPI(swagger_ui_parameters={"syntaxHighlight.theme": "obsidian"})
-
-# app = FastAPI()
-
 # Secret key for JWT
 SECRET_KEY = os.getenv("SECRET_KEY", "Android@123")  # Ensure you have a strong secret key
 
@@ -48,9 +44,41 @@ logger = logging.getLogger("uvicorn")
 
 conn = get_db_connection()
 PROXY_PREFIX = os.getenv("PROXY_PREFIX", "/api")
-app = FastAPI(root_path=PROXY_PREFIX)
-
 API_KEY = os.getenv("API_KEY")
+
+
+
+def reload_website():
+    url = "https://algomind-be-04f9.onrender.com/api/health-check"  # Replace with your Render URL
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        logger.info(f"Reloaded at {time.strftime('%Y-%m-%d %H:%M:%S')}: Status Code {response.status_code}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error reloading at {time.strftime('%Y-%m-%d %H:%M:%S')}: {e}")
+
+def run_schedule():
+    schedule.every(30).seconds.do(reload_website)  # Gọi hàm reload_website mỗi 30 giây một lần
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+# Định nghĩa một hàm lifespan để khởi động và dọn dẹp tài nguyên
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("auto reload active")
+    # Tạo một luồng để chạy schedule
+    thread = threading.Thread(target=run_schedule)
+    thread.daemon = True  # Đặt luồng thành daemon để nó tự động dừng khi ứng dụng dừng
+    thread.start()
+    yield  # Chờ cho đến khi ứng dụng dừng lại
+    logger.info("Shutting down auto reload")
+    
+app = FastAPI(
+    lifespan=lifespan, 
+    swagger_ui_parameters={"syntaxHighlight.theme": "obsidian"}, 
+    root_path=PROXY_PREFIX
+)
 
 
 class ModelKWArgs(BaseModel):
@@ -1420,33 +1448,9 @@ def health_check():
 def home():
     return {"message": "Solar Sailors welcome you to the backend of the project."}
 
-def reload_website():
-    url = "https://algomind-be-04f9.onrender.com/health-check"  # Replace with your Render URL
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        logger.info(f"Reloaded at {time.strftime('%Y-%m-%d %H:%M:%S')}: Status Code {response.status_code}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error reloading at {time.strftime('%Y-%m-%d %H:%M:%S')}: {e}")
 
-def run_schedule():
-    schedule.every(30).seconds.do(reload_website)  # Gọi hàm reload_website mỗi 30 giây một lần
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
 
-# Định nghĩa một hàm lifespan để khởi động và dọn dẹp tài nguyên
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("auto reload active")
-    # Tạo một luồng để chạy schedule
-    thread = threading.Thread(target=run_schedule)
-    thread.daemon = True  # Đặt luồng thành daemon để nó tự động dừng khi ứng dụng dừng
-    thread.start()
-    yield  # Chờ cho đến khi ứng dụng dừng lại
-    logger.info("Shutting down auto reload")
-
-app = FastAPI(lifespan=lifespan)
+# app = FastAPI(swagger_ui_parameters={"syntaxHighlight.theme": "obsidian"})
 
 if __name__ == "__main__":
     import uvicorn
