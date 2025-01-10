@@ -27,29 +27,39 @@ from fastapi.security import OAuth2PasswordBearer
 from test_algorand import router as algorand_router
 from fastapi import FastAPI
 
+
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
+
 # Secret key for JWT
-SECRET_KEY = os.getenv("SECRET_KEY", "Android@123")  # Ensure you have a strong secret key
+SECRET_KEY = os.getenv("SECRET_PY_KEY", "Android@123")  # Ensure you have a strong secret key
+BASE_URL = os.getenv("BASE_URL", "https://algomind-be-04f9.onrender.com/api/health-check")  # Ensure you have a strong secret key
 
 # JWT expiration time (in minutes)
 JWT_EXPIRATION_TIME = 60
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="signin")
 
-# Load environment variables from .env file
-load_dotenv()
+
+
 
 logging.basicConfig(level=logging.INFO)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("uvicorn")
 
+
+
+# Load environment variables from .env file
+logger.info(os.path.join(os.path.dirname(__file__), '.env'))
+
+
 conn = get_db_connection()
 PROXY_PREFIX = os.getenv("PROXY_PREFIX", "/api")
-API_KEY = os.getenv("API_KEY")
+API_KEY = os.getenv("API_KEY_TOKEN")
 
 
 
 def reload_website():
-    url = "https://algomind-be-04f9.onrender.com/api/health-check"  # Replace with your Render URL
+    url = BASE_URL  # Replace with your Render URL
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -250,22 +260,26 @@ def register(register_request: RegisterRequest):
 
 class UpdateUserRequest(BaseModel):
     birthday: Optional[datetime] = None
-    wallet_name: Optional[str] = None
-    wallet_address: Optional[str] = None
     follow_count: Optional[str] = None
     password: Optional[str] = None
 
 
 def get_current_user(token: str = Depends(oauth2_scheme)):
+    print("get_current_user")
+    print(f"token: {token}")
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        print(f"payload: {payload}")
         user_id = payload.get("sub")
+        print(f"user_id: {user_id}")
         if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token")
         return user_id
     except jwt.ExpiredSignatureError:
+        print("ExpiredSignatureError")
         raise HTTPException(status_code=401, detail="Token has expired")
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as e:
+        print(f"PyJWTError: {e}")
         raise HTTPException(status_code=401, detail="Invalid token")
 
 @app.put("/user/{user_id}")
@@ -283,14 +297,6 @@ def update_user(user_id: int, update_request: UpdateUserRequest, current_user: i
         if update_request.birthday is not None:
             update_fields.append("birthday = %s")
             update_values.append(update_request.birthday)
-
-        if update_request.wallet_name is not None:
-            update_fields.append("wallet_name = %s")
-            update_values.append(update_request.wallet_name)
-
-        if update_request.wallet_address is not None:
-            update_fields.append("wallet_address = %s")
-            update_values.append(update_request.wallet_address)
 
         if update_request.follow_count is not None:
             update_fields.append("follow_count = %s")
@@ -326,8 +332,6 @@ class UserResponse(BaseModel):
     id: int
     username: Optional[str] = None
     email: Optional[str] = None
-    wallet_name: Optional[str] = None
-    wallet_address: Optional[str] = None
     birthday: Optional[datetime] = None
     follow_count: Optional[int] = None
     created_at: Optional[datetime] = None
@@ -340,7 +344,7 @@ def get_current_user_info(current_user: int = Depends(get_current_user)):
     cursor = conn.cursor()
 
     try:
-        cursor.execute('SELECT id, username, email, birthday, follow_count, created_at, updated_at, deleted_at, wallet_name, wallet_address FROM algo_users WHERE id = %s AND deleted_at IS NULL;', (current_user,))
+        cursor.execute('SELECT id, username, email, birthday, follow_count, created_at, updated_at, deleted_at FROM algo_users WHERE id = %s AND deleted_at IS NULL;', (current_user,))
         user = cursor.fetchone()
 
         if user is None:
@@ -350,8 +354,6 @@ def get_current_user_info(current_user: int = Depends(get_current_user)):
             "id": user[0],
             "username": user[1],  
             "email": user[2],   
-            "wallet_name": user[8],
-            "wallet_address": user[9],
             "birthday": user[3],
             "follow_count": user[4],
             "created_at": user[5],
@@ -373,9 +375,9 @@ def get_users(current_user: int = Depends(get_current_user), email: Optional[str
 
     try:
         if email:
-            cursor.execute('SELECT id, email, username, birthday, created_at, wallet_name, wallet_address FROM algo_users WHERE email = %s', (email,))
+            cursor.execute('SELECT id, email, username, birthday, created_at FROM algo_users WHERE email = %s', (email,))
         else:
-            cursor.execute('SELECT id, email, username, birthday, created_at, wallet_name, wallet_address FROM algo_users')
+            cursor.execute('SELECT id, email, username, birthday, created_at FROM algo_users')
 
         users = cursor.fetchall()
 
@@ -386,8 +388,6 @@ def get_users(current_user: int = Depends(get_current_user), email: Optional[str
                 "username": user[2],
                 "birthday": user[3].strftime('%Y-%m-%d'),
                 "created_at": user[4].strftime('%Y-%m-%d %H:%M:%S'),
-                "wallet_name": user[5],
-                "wallet_address": user[6]
             }
             for user in users
         ]

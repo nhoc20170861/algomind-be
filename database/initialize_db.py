@@ -3,7 +3,7 @@ from sqlmodel import SQLModel, create_engine
 from models import *  # Giả sử models.py chứa các model của bạn
 
 # Khởi tạo engine PostgreSQL
-engine = create_engine("postgresql://algomind_user:G547D4SNYaPWkigM6fsXQLCR0eiVikd7@dpg-csg5fhu8ii6s739cbdng-a.singapore-postgres.render.com/algomind")
+engine = create_engine("postgresql://algomind_zvyu_user:1Z4vjDiTx690hASvE3zc6dXvp59HHo5A@dpg-ctk3b3q3esus73e5n4og-a.singapore-postgres.render.com/algomind_zvyu")
 
 # Tạo lại các bảng trong cơ sở dữ liệu
 SQLModel.metadata.create_all(engine, checkfirst=False)

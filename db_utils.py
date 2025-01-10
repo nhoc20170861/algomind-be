@@ -10,14 +10,10 @@ logger = logging.getLogger(__name__)
 
 def get_db_connection():
     try:
-        conn = psycopg2.connect(
-            host=os.environ["DB_HOST"],
-            dbname=os.environ["DB_NAME"],
-            user=os.environ["DB_USER"],
-            password=os.environ["DB_PASSWORD"],
-            port=os.environ["DB_PORT"],
-        )
-        logger.info("Connection to DB established..")
+        url = f"postgresql://{os.environ['DB_PY_USER']}:{os.environ['DB_PY_PASSWORD']}@{os.environ['DB_PY_HOST']}:{os.environ['DB_PY_PORT']}/{os.environ['DB_PY_NAME']}"
+
+        conn = psycopg2.connect(url)
+        logger.info(" Connection to DB established..")
         return conn
     except Exception as e:
         logger.error(f"Error connecting to DB: {str(e)}")
