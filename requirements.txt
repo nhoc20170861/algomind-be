@@ -16,7 +16,7 @@ unstructured
 opencv-python
 langchain-chroma
 markdown
-PyJWT 
+PyJWT==2.9.0
 bcrypt
 py-algorand-sdk
 schedule
